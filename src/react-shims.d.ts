@@ -16,8 +16,14 @@ declare module 'react/jsx-runtime' {
   export const Fragment: unknown;
 }
 
+declare module '*.css';
+
 declare namespace JSX {
   interface IntrinsicElements {
     [elemName: string]: Record<string, unknown>;
   }
+}
+
+interface Window {
+  webkitAudioContext?: typeof AudioContext;
 }
