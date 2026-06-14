@@ -14,21 +14,32 @@ export class Sheep extends Phaser.GameObjects.Sprite {
   }
 
   updateSheep(delta: number, joey: Point, obstacles: ObstacleConfig[], corral: CorralConfig) {
-    if (this.captured) return;
+    if (this.captured) return false;
     const dt = delta / 1000;
     const steer = new Phaser.Math.Vector2();
     const away = new Phaser.Math.Vector2(this.x - joey.x, this.y - joey.y);
     const distanceToJoey = away.length();
+    const corralCenter = new Phaser.Math.Vector2(corral.x + corral.width / 2, corral.y + corral.height / 2);
+    const toCorral = corralCenter.clone().subtract(new Phaser.Math.Vector2(this.x, this.y));
+    const distanceToCorral = toCorral.length();
 
-    // Sheep are calm when Joey is far away: they drift in a slow random direction.
-    // When Joey gets close, a fear force pushes the sheep directly away from him.
-    // Players herd by standing on the opposite side of a sheep from the corral, so the
-    // sheep's natural flee response becomes a gentle controllable push toward safety.
-    if (distanceToJoey < 185) steer.add(away.normalize().scale(260 * (1 - distanceToJoey / 185)));
+    // Sheep now behave more like a controllable flock than purely random critters.
+    // Joey's pressure still moves them away from him, but sheep also bias toward the
+    // corral when that pressure is coming from the useful "behind the flock" side.
+    if (distanceToJoey < 215) {
+      const pressure = 1 - distanceToJoey / 215;
+      const awayFromJoey = away.normalize();
+      const corralDirection = toCorral.lengthSq() > 0 ? toCorral.normalize() : new Phaser.Math.Vector2();
+      const usefulPush = Phaser.Math.Clamp(awayFromJoey.dot(corralDirection), 0, 1);
+
+      steer.add(awayFromJoey.scale(170 * pressure));
+      steer.add(corralDirection.scale((95 + 165 * usefulPush) * pressure));
+    }
     else {
       this.nextWander -= delta;
       if (this.nextWander <= 0) { this.wander.setTo(1, 0).rotate(Math.random() * Math.PI * 2); this.nextWander = Phaser.Math.Between(1200, 2600); }
-      steer.add(this.wander.clone().scale(34));
+      steer.add(this.wander.clone().scale(18));
+      if (distanceToCorral < 360 && toCorral.lengthSq() > 0) steer.add(toCorral.normalize().scale(16));
     }
 
     obstacles.forEach((rock) => {
@@ -44,7 +55,11 @@ export class Sheep extends Phaser.GameObjects.Sprite {
     this.x += this.velocity.x * dt;
     this.y += this.velocity.y * dt;
     if (this.velocity.lengthSq() > 4) this.rotation = this.velocity.angle() + Math.PI / 2;
-    if (Phaser.Geom.Rectangle.Contains(new Phaser.Geom.Rectangle(corral.x, corral.y, corral.width, corral.height), this.x, this.y)) this.capture();
+    if (Phaser.Geom.Rectangle.Contains(new Phaser.Geom.Rectangle(corral.x, corral.y, corral.width, corral.height), this.x, this.y)) {
+      this.capture();
+      return true;
+    }
+    return false;
   }
 
   private capture() {

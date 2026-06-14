@@ -14,6 +14,7 @@ export function PhaserGame() {
       height: 720,
       backgroundColor: '#88b95f',
       scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
+      input: { activePointers: 3 },
       scene: scenes,
     });
     return () => game.destroy(true);
