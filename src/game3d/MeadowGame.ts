@@ -1,9 +1,12 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { levels } from '../game/levels';
-import { HerdSimulation, type Vec } from './simulation';
+import { HerdSimulation, type Vec, type Ability } from './simulation';
 
-const palette = { grass: 0x9ebd70, wood: 0xe7c591, wool: 0xfff3dc, ink: 0x514935 };
+import { AnimalRig } from './animals';
+import { addCountryside } from './scenery';
+
+const palette = { grass: 0x88ab68, wood: 0xe7c591, wool: 0xfff3dc, ink: 0x514935 };
 const mat = (color: number) => new THREE.MeshStandardMaterial({ color, roughness: .88 });
 export class MeadowGame {
   private renderer!: THREE.WebGLRenderer;
@@ -12,9 +15,15 @@ export class MeadowGame {
   private terrain = new THREE.Group();
   private dog = new THREE.Group();
   private flock: THREE.Group[] = [];
-  private sheepLegs: THREE.Group[][] = [];
-  private gaitPhases: number[] = [];
-  private mixer?: THREE.AnimationMixer;
+  private sheepRigs: AnimalRig[] = [];
+  private dogRig = new AnimalRig(true);
+  private powers = document.createElement('div');
+  private audio?: AudioContext;
+  private soundMuted = false;
+  private barkRing = new THREE.Mesh(new THREE.RingGeometry(.96, 1, 64), new THREE.MeshBasicMaterial({ color: 0xffd16c, side: THREE.DoubleSide, transparent: true, opacity: 0 }));
+  private freezeRings: THREE.Mesh[] = [];
+  private boostRing = new THREE.Mesh(new THREE.RingGeometry(.45, .52, 32), new THREE.MeshBasicMaterial({ color: 0xffce65, side: THREE.DoubleSide, transparent: true }));
+
   private model?: THREE.Group;
   private marker = new THREE.Mesh(new THREE.RingGeometry(.28, .4, 32), new THREE.MeshBasicMaterial({ color: 0xffdf79, side: THREE.DoubleSide }));
   private sim = new HerdSimulation(levels[0]);
@@ -34,18 +43,27 @@ export class MeadowGame {
   private cameraRight = new THREE.Vector3();
   private cameraDown = new THREE.Vector3();
   constructor(private host: HTMLElement) {
+    this.powers.className = 'ability-bar'; this.powers.hidden = true;
+    this.powers.innerHTML = `<button data-power="boost" title="Move 2.15× faster for 1 second. Recharges in 5 seconds. Space key."><b>↯ Boost</b><small>1 sec · Space</small><span>Ready</span></button><button data-power="bark" title="Guide nearby sheep toward the corral for 3 seconds. Recharges in 15 seconds. B key."><b>◖ Bark</b><small>Nearby sheep · B</small><span>Ready</span></button><button data-power="freeze" title="Stop sheep for 1 second. Recharges in 10 seconds. F key."><b>❄ Sheep Stop</b><small>1 sec · F</small><span>Ready</span></button><button class="sound-toggle" aria-label="Mute bark sound" title="Mute bark sound">♪</button>`;
+    this.powers.querySelectorAll<HTMLButtonElement>('[data-power]').forEach(button => button.addEventListener('click', () => this.useAbility(button.dataset.power as Ability)));
+    this.powers.querySelector('.sound-toggle')?.addEventListener('click', event => { this.soundMuted = !this.soundMuted; const button = event.currentTarget as HTMLButtonElement; button.textContent = this.soundMuted ? '♩' : '♪'; button.setAttribute('aria-label', this.soundMuted ? 'Enable bark sound' : 'Mute bark sound'); button.setAttribute('aria-pressed', String(this.soundMuted)); });
+    host.append(this.powers);
     this.ui.className = 'overlay'; this.hud.className = 'hud'; host.append(this.hud, this.ui);
     this.ui.innerHTML = '<section class="panel loading"><span class="eyebrow">JOEY HERDS · 3D</span><h1>A little corgi.<br>A big day out.</h1><p>Getting Joey and the meadow ready…</p></section>';
     try { this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false }); }
     catch { this.fail('This browser could not start 3D graphics. Enable hardware acceleration or try another browser.'); return; }
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
     this.renderer.shadowMap.enabled = true; this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace; this.renderer.toneMapping = THREE.ACESFilmicToneMapping; this.renderer.toneMappingExposure = 1.15;
     this.renderer.setClearColor(0xdde7ce); this.renderer.domElement.setAttribute('aria-label', '3D pasture. Click or tap to move Joey. Use arrow keys or WASD to steer.');
     this.renderer.domElement.tabIndex = 0; host.prepend(this.renderer.domElement);
-    this.scene.add(this.terrain, this.dog, this.marker);
-    this.scene.add(new THREE.HemisphereLight(0xfff9e9, 0x637447, 2.1));
-    const sun = new THREE.DirectionalLight(0xffefcd, 3.1); sun.position.set(-10, 22, 12); sun.castShadow = true;
+    this.scene.add(this.terrain, this.dog, this.marker, this.barkRing);
+    this.dog.add(this.dogRig.root, this.boostRing);
+    this.barkRing.rotation.x = this.boostRing.rotation.x = -Math.PI / 2;
+    this.barkRing.position.y = .15; this.boostRing.position.y = .13; this.boostRing.visible = false;
+    this.scene.fog = new THREE.Fog(0xdde7ce, 48, 85);
+    this.scene.add(new THREE.HemisphereLight(0xfff9e9, 0x718057, 1.8));
+    const sun = new THREE.DirectionalLight(0xffefcd, 2.4); sun.position.set(-10, 22, 12); sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048); Object.assign(sun.shadow.camera, { left: -20, right: 20, top: 18, bottom: -18, near: .5, far: 65 }); sun.shadow.normalBias = .035; this.scene.add(sun);
     this.camera.position.set(8, 20, 25); this.camera.lookAt(0, 0, .4); this.camera.updateMatrixWorld();
     this.cameraRight.setFromMatrixColumn(this.camera.matrixWorld, 0).setY(0).normalize();
@@ -61,13 +79,14 @@ export class MeadowGame {
     new GLTFLoader().load(`${import.meta.env.BASE_URL}assets/models/joey.glb`, gltf => {
       if (this.disposed) { this.release(gltf.scene); return; }
       this.model = gltf.scene; this.model.scale.setScalar(.65); this.model.traverse(o => { if (o instanceof THREE.Mesh) o.castShadow = true; });
-      this.dog.add(this.model); this.mixer = new THREE.AnimationMixer(this.model);
-      gltf.animations.forEach(clip => this.mixer!.clipAction(clip).play());
+      // Replace the old rigid leg pieces with two-joint limbs and planted foot paths.
+      this.model.traverse(o => { if (/^(Front|Rear)[ _]/.test(o.name)) o.visible = false; });
+      this.dogRig.body.add(this.model); this.dogRig.update(.1, 0);
       if (this.status === 'loading') this.menu();
     }, undefined, () => { if (!this.disposed) this.fail('Joey’s model could not load. Check your connection and reload to try again.'); });
   }
   private fail(message: string) {
-    this.status = 'error'; this.keys.clear(); this.ui.hidden = false; this.hud.hidden = true;
+    this.status = 'error'; this.powers.hidden = true; this.keys.clear(); this.ui.hidden = false; this.hud.hidden = true;
     this.ui.innerHTML = `<section class="panel"><span class="eyebrow">JOEY HERDS</span><h1>A small hiccup</h1><p>${message}</p><button data-action="reload">Reload game</button></section>`;
     this.ui.querySelector('button')?.addEventListener('click', () => location.reload());
   }
@@ -75,13 +94,14 @@ export class MeadowGame {
     const m = new THREE.Mesh(geometry, material); m.position.set(position[0], position[1], position[2]); m.scale.set(scale[0], scale[1], scale[2]); m.castShadow = true; m.receiveShadow = true; parent.add(m); return m;
   }
   private buildLevel(id: number) {
-    this.release(this.terrain); this.terrain.clear(); this.flock = []; this.sheepLegs = []; this.gaitPhases = []; this.sim = new HerdSimulation(levels[id - 1]);
+    this.release(this.terrain); this.terrain.clear(); this.flock = []; this.sheepRigs = []; this.freezeRings = []; this.sim = new HerdSimulation(levels[id - 1]);
     const box = new THREE.BoxGeometry(1, 1, 1), sphere = new THREE.SphereGeometry(1, 10, 8);
     const grass = mat(palette.grass), wood = mat(palette.wood), darkWood = mat(0xab8054), wool = mat(palette.wool), face = mat(palette.ink);
     this.mesh(box, mat(0x769353), [0, -.38, .55], [26, .7, 13.6]);
     this.mesh(box, grass, [0, -.045, .55], [26.05, .18, 13.65]);
     // A simple repeatable scattering keeps the landscape stable when retrying.
     let seed = id * 891; const rand = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+    addCountryside(this.terrain, rand);
     const tufts = new THREE.InstancedMesh(new THREE.ConeGeometry(.035, .19, 3), mat(0x749d53), 400); const transform = new THREE.Object3D();
     for (let i = 0; i < 400; i++) { transform.position.set(rand() * 25 - 12.5, .1, rand() * 12.5 - 5.7); transform.rotation.y = rand() * Math.PI; transform.updateMatrix(); tufts.setMatrixAt(i, transform.matrix); } this.terrain.add(tufts);
     const flowerMat = mat(0xffe9a6);
@@ -102,41 +122,62 @@ export class MeadowGame {
     for (let i = 0; i < 3; i++) { const arrow = this.mesh(new THREE.ConeGeometry(.12, .28, 3), mat(0xfff4cc), [c.left - .7 + i * .24, .07, (c.top + c.bottom) / 2], [1, 1, .25]); arrow.rotation.z = -Math.PI / 2; }
     for (const r of this.sim.rocks) { const rock = this.mesh(new THREE.DodecahedronGeometry(1, 0), mat(0x9aa094), [r.x, r.radius * .35, r.z], [r.radius, r.radius * .65, r.radius]); rock.rotation.set(.15, rand() * 3, .12); }
     for (const s of this.sim.sheep) {
-      const group = new THREE.Group(); this.terrain.add(group);
-      this.mesh(sphere, wool, [0, .46, 0], [.32, .31, .46], group);
-      const legs: THREE.Group[] = [];
-      for (const x of [-.17, .17]) for (const z of [-.23, .23]) {
-        const hip = new THREE.Group(); hip.position.set(x, .31, z); group.add(hip);
-        this.mesh(box, face, [0, -.15, 0], [.08, .3, .08], hip); legs.push(hip);
-      }
-      this.sheepLegs.push(legs); this.gaitPhases.push(this.flock.length * .9);
-      this.mesh(sphere, face, [0, .53, .39], [.2, .2, .21], group);
-      for (const x of [-.22, .22]) this.mesh(sphere, face, [x, .59, .32], [.13, .055, .07], group);
-      for (const x of [-.09, .09]) this.mesh(sphere, wool, [x, .58, .565], [.035, .04, .024], group);
-      this.mesh(sphere, wool, [0, .5, -.44], [.12, .12, .14], group);
-      group.position.set(s.x, 0, s.z); this.flock.push(group);
+      const rig = new AnimalRig(); this.terrain.add(rig.root); rig.root.position.set(s.x, 0, s.z); rig.update(.1, 0);
+      this.sheepRigs.push(rig); this.flock.push(rig.root);
+      const ring = new THREE.Mesh(new THREE.RingGeometry(.43, .49, 32), new THREE.MeshBasicMaterial({ color: 0xa9edff, side: THREE.DoubleSide, transparent: true, opacity: .9 }));
+      ring.rotation.x = -Math.PI / 2; ring.position.y = .14; ring.visible = false; rig.root.add(ring); this.freezeRings.push(ring);
     }
     this.sync(0); this.marker.visible = false;
   }
   private menu = () => {
-    this.status = 'menu'; this.keys.clear(); this.hud.hidden = true; this.ui.hidden = false;
+    this.status = 'menu'; this.powers.hidden = true; this.keys.clear(); this.hud.hidden = true; this.ui.hidden = false;
     this.ui.innerHTML = `<section class="panel menu splash"><div class="splash-art"><img src="${import.meta.env.BASE_URL}assets/art/joey-and-luka.webp" alt="Stylized illustration of Joey the corgi with Luka" width="1536" height="1024" /><span>JOEY &amp; LUKA</span></div><div class="splash-content"><span class="eyebrow">A LITTLE CORGI. A BIG DAY OUT.</span><h1>Joey Herds<span class="badge">3D</span></h1><p>Round up the flock. Find your rhythm.<br>Bring every sheep safely home.</p><div class="level-list">${levels.map(l => `<button class="level" data-level="${l.id}"><span class="level-number">0${l.id}</span><span><strong>${l.name}</strong><small>${l.sheep.length} sheep · ${l.seconds} seconds</small></span><span aria-hidden="true">↗</span></button>`).join('')}</div><p class="help">Click or tap to move · WASD / arrow keys<br>Stand behind the sheep to guide them into the open corral.</p></div></section>`;
     this.ui.querySelectorAll<HTMLButtonElement>('[data-level]').forEach(b => b.addEventListener('click', () => this.start(Number(b.dataset.level))));
   };
   private start(id: number) { this.buildLevel(id); this.status = 'playing'; this.keys.clear(); this.ui.hidden = true; this.hud.hidden = false; this.lastHud = ''; this.updateHud(); this.previous = performance.now(); this.renderer.domElement.focus({ preventScroll: true }); }
+  private useAbility(ability: Ability) {
+    if (this.status !== 'playing' || !this.sim.activate(ability)) return;
+    if (ability === 'bark') {
+      this.barkRing.position.set(this.sim.joey.x, .15, this.sim.joey.z); this.playBark();
+    }
+    this.updatePowers(); this.renderer.domElement.focus({ preventScroll: true });
+  }
+  private playBark() {
+    if (this.soundMuted) return;
+    try {
+      this.audio ??= new AudioContext(); void this.audio.resume();
+      for (const delay of [0, .16]) {
+        const start = this.audio.currentTime + delay, oscillator = this.audio.createOscillator(), gain = this.audio.createGain(), filter = this.audio.createBiquadFilter();
+        oscillator.type = 'sawtooth'; oscillator.frequency.setValueAtTime(190, start); oscillator.frequency.exponentialRampToValueAtTime(75, start + .12);
+        filter.type = 'lowpass'; filter.frequency.value = 650; gain.gain.setValueAtTime(.001, start); gain.gain.exponentialRampToValueAtTime(.07, start + .018); gain.gain.exponentialRampToValueAtTime(.001, start + .13);
+        oscillator.connect(filter); filter.connect(gain); gain.connect(this.audio.destination); oscillator.start(start); oscillator.stop(start + .15); oscillator.onended = () => { oscillator.disconnect(); filter.disconnect(); gain.disconnect(); };
+      }
+    } catch { /* The visual bark and gameplay effect work without audio support. */ }
+  }
+  private updatePowers() {
+    this.powers.hidden = this.status !== 'playing';
+    for (const button of this.powers.querySelectorAll<HTMLButtonElement>('[data-power]')) {
+      const ability = button.dataset.power as Ability, remaining = this.sim.cooldowns[ability];
+      const active = ability === 'boost' ? this.sim.boostRemaining > .001 : ability === 'freeze' ? this.sim.freezeRemaining > .001 : this.sim.barkPulse > 0;
+      button.disabled = this.status !== 'playing' || remaining > .0001;
+      button.classList.toggle('active', active);
+      button.querySelector('span')!.textContent = active ? 'Active!' : remaining > .0001 ? `${Math.ceil(remaining)}s` : 'Ready';
+    }
+  }
   private updateHud() {
+    this.updatePowers();
     const text = `${this.sim.level.id}-${this.sim.captured}-${Math.ceil(this.sim.remaining)}`; if (text === this.lastHud) return; this.lastHud = text;
     this.hud.innerHTML = `<div class="brand"><strong>Joey Herds <em>3D</em></strong><small>${this.sim.level.name}</small></div><div class="score"><span>HOME</span><strong>${this.sim.captured}<i> / ${this.sim.sheep.length}</i></strong></div><div class="time ${this.sim.remaining < 15 ? 'urgent' : ''}"><span>TIME LEFT</span><strong>${Math.floor(Math.ceil(this.sim.remaining) / 60)}:${String(Math.ceil(this.sim.remaining) % 60).padStart(2, '0')}</strong></div><button class="pause" aria-label="Pause game">Ⅱ</button><div class="control-hint">Click to move · Herd toward the flag</div>`;
     this.hud.querySelector('button')?.addEventListener('click', this.pause);
   }
   private pause = () => {
-    if (this.status !== 'playing') return; this.status = 'paused'; this.keys.clear(); this.sim.target = undefined; this.ui.hidden = false;
+    if (this.status !== 'playing') return; this.status = 'paused'; this.powers.hidden = true; this.keys.clear(); this.sim.target = undefined; this.ui.hidden = false;
     this.ui.innerHTML = '<section class="panel compact"><span class="eyebrow">TAKE A BREATHER</span><h1>Good dog.<br>Short break.</h1><p>The flock will wait right here.</p><button data-resume>Back to the meadow</button><button class="secondary" data-menu>Choose a meadow</button></section>';
     this.ui.querySelector('[data-resume]')?.addEventListener('click', this.resume); this.ui.querySelector('[data-menu]')?.addEventListener('click', this.menu);
   };
   private resume = () => { if (this.status !== 'paused') return; this.status = 'playing'; this.ui.hidden = true; this.previous = performance.now(); this.renderer.domElement.focus({ preventScroll: true }); };
   private result() {
-    this.status = 'result'; this.keys.clear(); this.ui.hidden = false; const won = this.sim.status === 'won';
+    this.status = 'result'; this.powers.hidden = true; this.keys.clear(); this.ui.hidden = false; const won = this.sim.status === 'won';
     this.ui.innerHTML = `<section class="panel compact" role="status"><span class="eyebrow">${this.sim.level.name.toUpperCase()}</span><h1>${won ? 'Every sheep.<br>Safely home.' : 'One more<br>round, Joey?'}</h1><p>${won ? 'A very good dog, and a very happy flock.' : 'Time’s up. The meadow is ready for another try.'}</p><div class="result-score">${this.sim.captured}<span> / ${this.sim.sheep.length} sheep home</span></div><button data-retry>Play again</button>${won && this.sim.level.id < levels.length ? '<button data-next>Next meadow →</button>' : ''}<button class="secondary" data-menu>Choose a meadow</button></section>`;
     this.ui.querySelector('[data-retry]')?.addEventListener('click', () => this.start(this.sim.level.id)); this.ui.querySelector('[data-next]')?.addEventListener('click', () => this.start(this.sim.level.id + 1)); this.ui.querySelector('[data-menu]')?.addEventListener('click', this.menu);
   }
@@ -148,6 +189,7 @@ export class MeadowGame {
   };
   private keyDown = (event: KeyboardEvent) => {
     const key = event.key.toLowerCase();
+    if (this.status === 'playing' && [' ', 'b', 'f'].includes(key)) { event.preventDefault(); if (!event.repeat) this.useAbility(key === ' ' ? 'boost' : key === 'b' ? 'bark' : 'freeze'); return; }
     if (key === 'escape' && !event.repeat) { this.status === 'paused' ? this.resume() : this.pause(); return; }
     if (this.status === 'playing' && ['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(key)) { event.preventDefault(); this.keys.add(key); }
   };
@@ -169,19 +211,16 @@ export class MeadowGame {
   private sync(dt: number) {
     this.dog.position.set(this.sim.joey.x, 0, this.sim.joey.z);
     const angle = this.sim.facing - this.dog.rotation.y; this.dog.rotation.y += Math.atan2(Math.sin(angle), Math.cos(angle)) * Math.min(1, dt * 15 || 1);
-    if (this.mixer && this.status === 'playing') { if (this.sim.moving) this.mixer.update(dt * 1.9); else this.mixer.setTime(0); }
+    this.dogRig.update(dt, this.sim.joeySpeed);
+    this.boostRing.visible = this.sim.boostRemaining > .001;
+    const bark = this.sim.barkPulse / .7; this.barkRing.visible = bark > 0;
+    this.barkRing.scale.setScalar(1 + (1 - bark) * 5.5); this.barkRing.material.opacity = bark * .75;
     this.flock.forEach((group, i) => {
       const s = this.sim.sheep[i];
       const speed = s.captured ? 0 : Math.hypot(s.vx, s.vz);
-      const stride = Math.min(1, speed / 1.5);
-      // Distance-driven phases make a calm walk become a quick trot when fleeing.
-      this.gaitPhases[i] += speed * dt * 8;
-      const phase = this.gaitPhases[i];
-      this.sheepLegs[i].forEach((leg, j) => {
-        const opposite = j === 0 || j === 3 ? 0 : Math.PI;
-        leg.rotation.x = Math.sin(phase + opposite) * .65 * stride;
-      });
-      group.position.set(s.x, s.captured ? .025 : Math.abs(Math.sin(phase)) * .06 * stride, s.z);
+      this.sheepRigs[i].update(dt, speed, s.captured || this.sim.freezeRemaining > .001);
+      this.freezeRings[i].visible = !s.captured && this.sim.freezeRemaining > .001;
+      group.position.set(s.x, .02, s.z);
       if (speed > .05) {
         const angle = Math.atan2(s.vx, s.vz) - group.rotation.y;
         group.rotation.y += Math.atan2(Math.sin(angle), Math.cos(angle)) * Math.min(1, dt * 12 || 1);
@@ -202,5 +241,5 @@ export class MeadowGame {
     const geometries = new Set<THREE.BufferGeometry>(), materials = new Set<THREE.Material>();
     root.traverse(o => { if (o instanceof THREE.Mesh) { geometries.add(o.geometry); (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => materials.add(m)); } }); geometries.forEach(g => g.dispose()); materials.forEach(m => m.dispose());
   }
-  dispose() { this.disposed = true; cancelAnimationFrame(this.raf); this.abort.abort(); this.resizeObserver?.disconnect(); this.mixer?.stopAllAction(); if (this.model) this.mixer?.uncacheRoot(this.model); this.release(this.scene); this.renderer?.dispose(); this.host.replaceChildren(); }
+  dispose() { this.disposed = true; cancelAnimationFrame(this.raf); this.abort.abort(); this.resizeObserver?.disconnect(); void this.audio?.close(); this.release(this.scene); this.renderer?.dispose(); this.host.replaceChildren(); }
 }
