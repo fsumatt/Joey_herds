@@ -37,3 +37,9 @@ The development URL includes `/Joey_herds/`. A WebGL 2 capable browser is requir
 ## GitHub Pages
 
 Vite uses `/Joey_herds/` as its base path, including the GLB request. The existing Pages workflow tests and builds on pushes to `main`, then deploys `dist`. Pull requests run the same tests and build without deploying. In repository settings, select **GitHub Actions** as the Pages source.
+
+## Flock movement and splash screen
+
+Sheep keep a small margin from the outer pasture bounds so Joey can flank them. Nearby fence normals redirect blocked steering inward, and corral walls encourage sliding toward an open end. Collision-adjusted velocity drives alternating sheep leg animation: slow wandering walks, faster fleeing trots, and still legs when resting or captured. Edge/corner regressions cover all four sides and corners under sustained pressure, flanking, corral sliding and entrance capture.
+
+The welcome screen features a transparent, stylized Joey-and-Luka illustration and adapts its layout for phones.

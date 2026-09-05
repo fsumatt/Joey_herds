@@ -12,6 +12,8 @@ export class MeadowGame {
   private terrain = new THREE.Group();
   private dog = new THREE.Group();
   private flock: THREE.Group[] = [];
+  private sheepLegs: THREE.Group[][] = [];
+  private gaitPhases: number[] = [];
   private mixer?: THREE.AnimationMixer;
   private model?: THREE.Group;
   private marker = new THREE.Mesh(new THREE.RingGeometry(.28, .4, 32), new THREE.MeshBasicMaterial({ color: 0xffdf79, side: THREE.DoubleSide }));
@@ -73,7 +75,7 @@ export class MeadowGame {
     const m = new THREE.Mesh(geometry, material); m.position.set(position[0], position[1], position[2]); m.scale.set(scale[0], scale[1], scale[2]); m.castShadow = true; m.receiveShadow = true; parent.add(m); return m;
   }
   private buildLevel(id: number) {
-    this.release(this.terrain); this.terrain.clear(); this.flock = []; this.sim = new HerdSimulation(levels[id - 1]);
+    this.release(this.terrain); this.terrain.clear(); this.flock = []; this.sheepLegs = []; this.gaitPhases = []; this.sim = new HerdSimulation(levels[id - 1]);
     const box = new THREE.BoxGeometry(1, 1, 1), sphere = new THREE.SphereGeometry(1, 10, 8);
     const grass = mat(palette.grass), wood = mat(palette.wood), darkWood = mat(0xab8054), wool = mat(palette.wool), face = mat(palette.ink);
     this.mesh(box, mat(0x769353), [0, -.38, .55], [26, .7, 13.6]);
@@ -102,7 +104,12 @@ export class MeadowGame {
     for (const s of this.sim.sheep) {
       const group = new THREE.Group(); this.terrain.add(group);
       this.mesh(sphere, wool, [0, .46, 0], [.32, .31, .46], group);
-      for (const x of [-.17, .17]) for (const z of [-.23, .23]) this.mesh(box, face, [x, .15, z], [.08, .3, .08], group);
+      const legs: THREE.Group[] = [];
+      for (const x of [-.17, .17]) for (const z of [-.23, .23]) {
+        const hip = new THREE.Group(); hip.position.set(x, .31, z); group.add(hip);
+        this.mesh(box, face, [0, -.15, 0], [.08, .3, .08], hip); legs.push(hip);
+      }
+      this.sheepLegs.push(legs); this.gaitPhases.push(this.flock.length * .9);
       this.mesh(sphere, face, [0, .53, .39], [.2, .2, .21], group);
       for (const x of [-.22, .22]) this.mesh(sphere, face, [x, .59, .32], [.13, .055, .07], group);
       for (const x of [-.09, .09]) this.mesh(sphere, wool, [x, .58, .565], [.035, .04, .024], group);
@@ -113,7 +120,7 @@ export class MeadowGame {
   }
   private menu = () => {
     this.status = 'menu'; this.keys.clear(); this.hud.hidden = true; this.ui.hidden = false;
-    this.ui.innerHTML = `<section class="panel menu"><span class="eyebrow">A LITTLE CORGI. A BIG DAY OUT.</span><h1>Joey Herds<span class="badge">3D</span></h1><p>Round up the flock. Find your rhythm.<br>Bring every sheep safely home.</p><div class="level-list">${levels.map(l => `<button class="level" data-level="${l.id}"><span class="level-number">0${l.id}</span><span><strong>${l.name}</strong><small>${l.sheep.length} sheep · ${l.seconds} seconds</small></span><span aria-hidden="true">↗</span></button>`).join('')}</div><p class="help">Click or tap to move · WASD / arrow keys<br>Stand behind the sheep to guide them into the open corral.</p></section>`;
+    this.ui.innerHTML = `<section class="panel menu splash"><div class="splash-art"><img src="${import.meta.env.BASE_URL}assets/art/joey-and-luka.webp" alt="Stylized illustration of Joey the corgi with Luka" width="1536" height="1024" /><span>JOEY &amp; LUKA</span></div><div class="splash-content"><span class="eyebrow">A LITTLE CORGI. A BIG DAY OUT.</span><h1>Joey Herds<span class="badge">3D</span></h1><p>Round up the flock. Find your rhythm.<br>Bring every sheep safely home.</p><div class="level-list">${levels.map(l => `<button class="level" data-level="${l.id}"><span class="level-number">0${l.id}</span><span><strong>${l.name}</strong><small>${l.sheep.length} sheep · ${l.seconds} seconds</small></span><span aria-hidden="true">↗</span></button>`).join('')}</div><p class="help">Click or tap to move · WASD / arrow keys<br>Stand behind the sheep to guide them into the open corral.</p></div></section>`;
     this.ui.querySelectorAll<HTMLButtonElement>('[data-level]').forEach(b => b.addEventListener('click', () => this.start(Number(b.dataset.level))));
   };
   private start(id: number) { this.buildLevel(id); this.status = 'playing'; this.keys.clear(); this.ui.hidden = true; this.hud.hidden = false; this.lastHud = ''; this.updateHud(); this.previous = performance.now(); this.renderer.domElement.focus({ preventScroll: true }); }
@@ -163,7 +170,24 @@ export class MeadowGame {
     this.dog.position.set(this.sim.joey.x, 0, this.sim.joey.z);
     const angle = this.sim.facing - this.dog.rotation.y; this.dog.rotation.y += Math.atan2(Math.sin(angle), Math.cos(angle)) * Math.min(1, dt * 15 || 1);
     if (this.mixer && this.status === 'playing') { if (this.sim.moving) this.mixer.update(dt * 1.9); else this.mixer.setTime(0); }
-    this.flock.forEach((group, i) => { const s = this.sim.sheep[i]; group.position.set(s.x, s.captured ? .025 : Math.abs(Math.sin(this.elapsed * 11 + i)) * Math.min(.045, Math.hypot(s.vx, s.vz) * .025), s.z); if (Math.hypot(s.vx, s.vz) > .05) group.rotation.y = Math.atan2(s.vx, s.vz); group.scale.setScalar(s.captured ? .9 : 1); });
+    this.flock.forEach((group, i) => {
+      const s = this.sim.sheep[i];
+      const speed = s.captured ? 0 : Math.hypot(s.vx, s.vz);
+      const stride = Math.min(1, speed / 1.5);
+      // Distance-driven phases make a calm walk become a quick trot when fleeing.
+      this.gaitPhases[i] += speed * dt * 8;
+      const phase = this.gaitPhases[i];
+      this.sheepLegs[i].forEach((leg, j) => {
+        const opposite = j === 0 || j === 3 ? 0 : Math.PI;
+        leg.rotation.x = Math.sin(phase + opposite) * .65 * stride;
+      });
+      group.position.set(s.x, s.captured ? .025 : Math.abs(Math.sin(phase)) * .06 * stride, s.z);
+      if (speed > .05) {
+        const angle = Math.atan2(s.vx, s.vz) - group.rotation.y;
+        group.rotation.y += Math.atan2(Math.sin(angle), Math.cos(angle)) * Math.min(1, dt * 12 || 1);
+      }
+      group.scale.setScalar(s.captured ? .9 : 1);
+    });
     this.marker.visible = !!this.sim.target && this.status === 'playing'; if (this.sim.target) this.marker.position.set(this.sim.target.x, .13, this.sim.target.z);
   }
   private frame = (now: number) => {
