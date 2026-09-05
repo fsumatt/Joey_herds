@@ -29,3 +29,8 @@
   .splash-content .level { padding: 7px 12px; }
   .splash-content .help { margin-top: 12px; }
 }
+
+.ability-bar{position:absolute;bottom:22px;left:50%;transform:translateX(-50%);display:flex;gap:9px;z-index:2;padding:8px;background:#fffaf0ed;border:1px solid #ffffffa0;border-radius:18px;box-shadow:0 8px 28px #3a4c3426}
+.ability-bar[hidden]{display:none}.ability-bar button{background:#e7edda;color:#43543a;border-radius:12px;padding:10px 20px;min-width:125px;text-align:left;transition:background .15s}.ability-bar button:hover:not(:disabled){background:#d8e7bd}.ability-bar b,.ability-bar small,.ability-bar span{display:block}.ability-bar b{font-size:13px}.ability-bar small{font-size:9px;color:#7c886e;margin:4px 0}.ability-bar span{font-size:10px;font-weight:700;color:#6e8953}.ability-bar button:disabled{opacity:.6;cursor:default}.ability-bar button.active{background:#fae5ac;opacity:1}.ability-bar .sound-toggle{min-width:30px;padding:10px;font-size:20px;text-align:center}
+@media(max-width:600px){.ability-bar{bottom:13px;gap:5px;padding:6px;width:calc(100% - 20px);justify-content:space-between}.ability-bar button{min-width:0;flex:1;padding:9px}.ability-bar b{font-size:11px}.ability-bar small{font-size:8px}.ability-bar .sound-toggle{flex:0;min-width:28px;padding:5px}}
+@media(max-height:520px) and (min-width:601px){.ability-bar{bottom:8px;padding:5px}.ability-bar button{padding:7px 14px}.ability-bar small{margin:2px 0}.hud{top:10px;padding:10px 16px}.control-hint{top:calc(100% + 6px)}}
