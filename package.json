@@ -2,14 +2,20 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --import tsx --test tests/*.test.ts"
   },
   "dependencies": {
     "vite": "latest",
     "typescript": "latest",
     "react": "latest",
     "react-dom": "latest",
-    "phaser": "latest"
+    "three": "^0.180.0"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "@types/three": "^0.180.0",
+    "@types/react": "^19.1.16",
+    "@types/react-dom": "^19.1.9",
+    "tsx": "^4.20.6"
+  }
 }

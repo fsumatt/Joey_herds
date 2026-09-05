@@ -1,50 +1,39 @@
-# Joey Herds
+# Joey Herds · 3D
 
-Joey Herds is a cute top-down browser herding game built with Vite, React, TypeScript, and Phaser 3. The player guides Joey, a tan-and-white corgi, around a pasture to herd sheep into a fenced corral before time runs out.
+A cozy browser herding game starring Joey, a tan-and-white corgi modeled in Blender from family photos. Guide sheep into the open side of the corral before time runs out.
+
+## The 3D upgrade
+
+- Three.js replaces the Phaser sprite renderer with a real 3D meadow, sheep, rocks, fences, lighting and shadows.
+- Joey uses the included GLB model and its walk animation. He turns toward travel and rests when stopped.
+- An orthographic, elevated three-quarter camera keeps the whole pasture visible. Portrait screens use a rotated angle to make better use of the display.
+- All five original levels, flock sizes and time limits remain. Sheep flee from Joey and avoid rocks and one another. The corral has three solid sides and an open left entrance.
+- Pause, resume, retry, next level and level selection are supported. Switching tabs pauses the game.
 
 ## Controls
 
-- **Primary control:** tap or click anywhere on the pasture to send Joey to that destination.
-- A small marker appears where Joey is headed and disappears once he arrives.
-- **Desktop fallback:** WASD and arrow keys still move Joey directly.
-- Sheep react to Joey by proximity, so tap/click movement continues to push the flock while Joey travels.
+Click or tap the pasture to set Joey’s destination. WASD or arrow keys steer relative to the screen and cancel the current destination. Press Escape or the pause button to pause/resume. Position Joey on the opposite side of the sheep from the corral to push them toward its entrance. Direct movement does not automatically find a path around rocks or fences; steer around them.
 
-## Local development
+## Development
 
-Install dependencies:
+Use Node.js 22.12+ (Node 24 recommended).
 
-```bash
-npm install
-```
-
-Start the Vite development server:
-
-```bash
+```sh
+npm ci
 npm run dev
-```
-
-Create a production build:
-
-```bash
+npm test
 npm run build
-```
-
-Preview the production build locally:
-
-```bash
 npm run preview
 ```
 
-## GitHub Pages deployment
+The development URL includes `/Joey_herds/`. A WebGL 2 capable browser is required. The game displays a reload message if graphics initialization or the model request fails. Desktop and landscape screens provide the largest play area; portrait adapts the camera to retain the full field.
 
-This project is configured for GitHub Pages under the repository path `/Joey_herds/` via Vite's `base` setting in `vite.config.ts`.
+`src/game3d/simulation.ts` contains the independently tested movement, collision, flock and scoring logic. `src/game3d/MeadowGame.ts` owns rendering, animation, input and the game screens. Original level data remains in `src/game/levels.ts`.
 
-The workflow at `.github/workflows/deploy-pages.yml` runs on pushes to `main` and can also be started manually from the GitHub Actions tab. It:
+## Joey model
 
-1. Checks out the repository.
-2. Installs dependencies with `npm install`.
-3. Builds the project with `npm run build`.
-4. Uploads the `dist` folder as a Pages artifact.
-5. Deploys that artifact to GitHub Pages.
+`public/assets/models/joey.glb` is a self-contained, approximately 35,000-triangle model with a one-second `Walk` clip. Its animation uses object pivots, not a skeletal rig. The character faces +Z in Three.js and is scaled by 0.65 in the game. See `public/assets/README.md` for asset details.
 
-Before using it, enable GitHub Pages for the repository and choose **GitHub Actions** as the Pages source in the repository settings.
+## GitHub Pages
+
+Vite uses `/Joey_herds/` as its base path, including the GLB request. The existing Pages workflow tests and builds on pushes to `main`, then deploys `dist`. Pull requests run the same tests and build without deploying. In repository settings, select **GitHub Actions** as the Pages source.

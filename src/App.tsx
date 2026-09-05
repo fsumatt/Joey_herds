@@ -1,9 +1,2 @@
-import { PhaserGame } from './components/PhaserGame';
-
-export default function App() {
-  return (
-    <main className="app-shell">
-      <PhaserGame />
-    </main>
-  );
-}
+import { ThreeGame } from './components/ThreeGame';
+export default function App() { return <main className="app-shell"><ThreeGame /></main>; }
