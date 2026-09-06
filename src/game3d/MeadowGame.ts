@@ -5,6 +5,7 @@ import { HerdSimulation, type Vec, type Ability } from './simulation';
 
 import { AnimalRig } from './animals';
 import { addCountryside } from './scenery';
+import { addTerrainDetails } from './terrain';
 
 const palette = { grass: 0x88ab68, wood: 0xe7c591, wool: 0xfff3dc, ink: 0x514935 };
 const mat = (color: number) => new THREE.MeshStandardMaterial({ color, roughness: .88 });
@@ -21,7 +22,6 @@ export class MeadowGame {
   private audio?: AudioContext;
   private soundMuted = false;
   private barkRing = new THREE.Mesh(new THREE.RingGeometry(.96, 1, 64), new THREE.MeshBasicMaterial({ color: 0xffd16c, side: THREE.DoubleSide, transparent: true, opacity: 0 }));
-  private freezeRings: THREE.Mesh[] = [];
   private boostRing = new THREE.Mesh(new THREE.RingGeometry(.45, .52, 32), new THREE.MeshBasicMaterial({ color: 0xffce65, side: THREE.DoubleSide, transparent: true }));
 
   private model?: THREE.Group;
@@ -44,7 +44,7 @@ export class MeadowGame {
   private cameraDown = new THREE.Vector3();
   constructor(private host: HTMLElement) {
     this.powers.className = 'ability-bar'; this.powers.hidden = true;
-    this.powers.innerHTML = `<button data-power="boost" title="Move 2.15× faster for 1 second. Recharges in 5 seconds. Space key."><b>↯ Boost</b><small>1 sec · Space</small><span>Ready</span></button><button data-power="bark" title="Guide nearby sheep toward the corral for 3 seconds. Recharges in 15 seconds. B key."><b>◖ Bark</b><small>Nearby sheep · B</small><span>Ready</span></button><button data-power="freeze" title="Stop sheep for 1 second. Recharges in 10 seconds. F key."><b>❄ Sheep Stop</b><small>1 sec · F</small><span>Ready</span></button><button class="sound-toggle" aria-label="Mute bark sound" title="Mute bark sound">♪</button>`;
+    this.powers.innerHTML = `<button data-power="boost" title="Move 2.15× faster for 1 second. Recharges in 5 seconds. Space key."><b>↯ Boost</b><small>1 sec · Space</small><span>Ready</span></button><button data-power="bark" title="Briefly nudge nearby sheep toward home. Positioning still matters. Recharges in 15 seconds. B key."><b>◖ Bark</b><small>Nearby sheep · B</small><span>Ready</span></button><button class="sound-toggle" aria-label="Mute bark sound" title="Mute bark sound">♪</button>`;
     this.powers.querySelectorAll<HTMLButtonElement>('[data-power]').forEach(button => button.addEventListener('click', () => this.useAbility(button.dataset.power as Ability)));
     this.powers.querySelector('.sound-toggle')?.addEventListener('click', event => { this.soundMuted = !this.soundMuted; const button = event.currentTarget as HTMLButtonElement; button.textContent = this.soundMuted ? '♩' : '♪'; button.setAttribute('aria-label', this.soundMuted ? 'Enable bark sound' : 'Mute bark sound'); button.setAttribute('aria-pressed', String(this.soundMuted)); });
     host.append(this.powers);
@@ -94,16 +94,17 @@ export class MeadowGame {
     const m = new THREE.Mesh(geometry, material); m.position.set(position[0], position[1], position[2]); m.scale.set(scale[0], scale[1], scale[2]); m.castShadow = true; m.receiveShadow = true; parent.add(m); return m;
   }
   private buildLevel(id: number) {
-    this.release(this.terrain); this.terrain.clear(); this.flock = []; this.sheepRigs = []; this.freezeRings = []; this.sim = new HerdSimulation(levels[id - 1]);
+    this.release(this.terrain); this.terrain.clear(); this.flock = []; this.sheepRigs = []; this.sim = new HerdSimulation(levels[id - 1]);
     const box = new THREE.BoxGeometry(1, 1, 1), sphere = new THREE.SphereGeometry(1, 10, 8);
-    const grass = mat(palette.grass), wood = mat(palette.wood), darkWood = mat(0xab8054), wool = mat(palette.wool), face = mat(palette.ink);
-    this.mesh(box, mat(0x769353), [0, -.38, .55], [26, .7, 13.6]);
-    this.mesh(box, grass, [0, -.045, .55], [26.05, .18, 13.65]);
+    const grass = mat([0x88ab68,0x91b078,0x8caa68,0x9bad70,0x8fa56b][id-1]), wood = mat(palette.wood), darkWood = mat(0xab8054), wool = mat(palette.wool), face = mat(palette.ink);
+    const outline = new THREE.Shape(); this.sim.field.forEach((p,i)=>i ? outline.lineTo(p.x,-p.z) : outline.moveTo(p.x,-p.z)); outline.closePath();
+    const soil=this.mesh(new THREE.ExtrudeGeometry(outline,{depth:.6,bevelEnabled:false}),mat(0x769353),[0,-.56,0],[1,1,1]);soil.rotation.x=-Math.PI/2;
+    const turf=this.mesh(new THREE.ShapeGeometry(outline),grass,[0,.045,0],[1,1,1]);turf.rotation.x=-Math.PI/2;
     // A simple repeatable scattering keeps the landscape stable when retrying.
     let seed = id * 891; const rand = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
     addCountryside(this.terrain, rand);
     const tufts = new THREE.InstancedMesh(new THREE.ConeGeometry(.035, .19, 3), mat(0x749d53), 400); const transform = new THREE.Object3D();
-    for (let i = 0; i < 400; i++) { transform.position.set(rand() * 25 - 12.5, .1, rand() * 12.5 - 5.7); transform.rotation.y = rand() * Math.PI; transform.updateMatrix(); tufts.setMatrixAt(i, transform.matrix); } this.terrain.add(tufts);
+    for (let i = 0; i < 400; i++) { transform.position.set(rand() * 25 - 12.5, .1, rand() * 12.5 - 5.7); if(!this.sim.insideField({x:transform.position.x,z:transform.position.z},.1)||this.sim.terrainSpeed({x:transform.position.x,z:transform.position.z})<1)transform.position.y=-1; transform.rotation.y = rand() * Math.PI; transform.updateMatrix(); tufts.setMatrixAt(i, transform.matrix); } this.terrain.add(tufts);
     const flowerMat = mat(0xffe9a6);
     for (let i = 0; i < 35; i++) this.mesh(sphere, flowerMat, [rand() * 24 - 12, .08, rand() * 12 - 5.4], [.045, .045, .045]);
     const fence = (a: Vec, b: Vec, low = false) => {
@@ -111,8 +112,9 @@ export class MeadowGame {
       for (let i = 0; i <= count; i++) { const t = i / count; this.mesh(box, wood, [a.x + (b.x - a.x) * t, .39, a.z + (b.z - a.z) * t], [.12, .84, .12]); }
       for (const height of low ? [.27] : [.28, .61]) { const rail = this.mesh(box, wood, [(a.x + b.x) / 2, height, (a.z + b.z) / 2], [length, .085, .07]); rail.rotation.y = -Math.atan2(b.z - a.z, b.x - a.x); }
     };
-    fence({ x: -12.7, z: -5.8 }, { x: 12.7, z: -5.8 }); fence({ x: -12.7, z: -5.8 }, { x: -12.7, z: 6.95 }, true);
-    fence({ x: 12.7, z: -5.8 }, { x: 12.7, z: 6.95 }, true);
+    for(const edge of this.sim.outer) fence(edge.a,edge.b,Math.max(edge.a.z,edge.b.z)>0);
+    for(const edge of this.sim.fences) fence(edge.a,edge.b);
+    addTerrainDetails(this.terrain,this.sim);
     const c = this.sim.corral;
     this.mesh(box, mat(0xc6cb88), [(c.left + c.right) / 2, .055, (c.top + c.bottom) / 2], [c.right - c.left, .025, c.bottom - c.top]);
     fence({ x: c.left, z: c.top }, { x: c.right, z: c.top }); fence({ x: c.right, z: c.top }, { x: c.right, z: c.bottom }); fence({ x: c.left, z: c.bottom }, { x: c.right, z: c.bottom });
@@ -120,18 +122,16 @@ export class MeadowGame {
     const flag = this.mesh(new THREE.PlaneGeometry(.62, .4), new THREE.MeshStandardMaterial({ color: 0xe6a453, side: THREE.DoubleSide }), [c.right - .03, 1.62, c.top], [1, 1, 1]); flag.rotation.y = .3;
     // Entrance arrows point toward the open side of the corral.
     for (let i = 0; i < 3; i++) { const arrow = this.mesh(new THREE.ConeGeometry(.12, .28, 3), mat(0xfff4cc), [c.left - .7 + i * .24, .07, (c.top + c.bottom) / 2], [1, 1, .25]); arrow.rotation.z = -Math.PI / 2; }
-    for (const r of this.sim.rocks) { const rock = this.mesh(new THREE.DodecahedronGeometry(1, 0), mat(0x9aa094), [r.x, r.radius * .35, r.z], [r.radius, r.radius * .65, r.radius]); rock.rotation.set(.15, rand() * 3, .12); }
     for (const s of this.sim.sheep) {
       const rig = new AnimalRig(); this.terrain.add(rig.root); rig.root.position.set(s.x, 0, s.z); rig.update(.1, 0);
       this.sheepRigs.push(rig); this.flock.push(rig.root);
-      const ring = new THREE.Mesh(new THREE.RingGeometry(.43, .49, 32), new THREE.MeshBasicMaterial({ color: 0xa9edff, side: THREE.DoubleSide, transparent: true, opacity: .9 }));
-      ring.rotation.x = -Math.PI / 2; ring.position.y = .14; ring.visible = false; rig.root.add(ring); this.freezeRings.push(ring);
+
     }
     this.sync(0); this.marker.visible = false;
   }
   private menu = () => {
     this.status = 'menu'; this.powers.hidden = true; this.keys.clear(); this.hud.hidden = true; this.ui.hidden = false;
-    this.ui.innerHTML = `<section class="panel menu splash"><div class="splash-art"><img src="${import.meta.env.BASE_URL}assets/art/joey-and-luka.webp" alt="Stylized illustration of Joey the corgi with Luka" width="1536" height="1024" /><span>JOEY &amp; LUKA</span></div><div class="splash-content"><span class="eyebrow">A LITTLE CORGI. A BIG DAY OUT.</span><h1>Joey Herds<span class="badge">3D</span></h1><p>Round up the flock. Find your rhythm.<br>Bring every sheep safely home.</p><div class="level-list">${levels.map(l => `<button class="level" data-level="${l.id}"><span class="level-number">0${l.id}</span><span><strong>${l.name}</strong><small>${l.sheep.length} sheep · ${l.seconds} seconds</small></span><span aria-hidden="true">↗</span></button>`).join('')}</div><p class="help">Click or tap to move · WASD / arrow keys<br>Stand behind the sheep to guide them into the open corral.</p></div></section>`;
+    this.ui.innerHTML = `<section class="panel menu splash"><div class="splash-art"><img src="${import.meta.env.BASE_URL}assets/art/joey-and-luka.webp" alt="Stylized illustration of Joey the corgi with Luka" width="1536" height="1024" /><span>JOEY &amp; LUKA</span></div><div class="splash-content"><span class="eyebrow">A LITTLE CORGI. A BIG DAY OUT.</span><h1>Joey Herds<span class="badge">3D</span></h1><p>Round up the flock. Find your rhythm.<br>Bring every sheep safely home.</p><div class="level-list">${levels.map(l => `<button class="level" data-level="${l.id}"><span class="level-number">0${l.id}</span><span><strong>${l.name}</strong><small>${l.sheep.length} sheep · ${l.seconds} seconds</small><small class="level-description">${l.description ?? ""}</small></span><span aria-hidden="true">↗</span></button>`).join('')}</div><p class="help">Click or tap to move · WASD / arrow keys<br>Stand behind the sheep to guide them into the open corral.</p></div></section>`;
     this.ui.querySelectorAll<HTMLButtonElement>('[data-level]').forEach(b => b.addEventListener('click', () => this.start(Number(b.dataset.level))));
   };
   private start(id: number) { this.buildLevel(id); this.status = 'playing'; this.keys.clear(); this.ui.hidden = true; this.hud.hidden = false; this.lastHud = ''; this.updateHud(); this.previous = performance.now(); this.renderer.domElement.focus({ preventScroll: true }); }
@@ -142,23 +142,31 @@ export class MeadowGame {
     }
     this.updatePowers(); this.renderer.domElement.focus({ preventScroll: true });
   }
-  private playBark() {
-    if (this.soundMuted) return;
+  private async playBark() {
+    if(this.soundMuted)return;
     try {
-      this.audio ??= new AudioContext(); void this.audio.resume();
-      for (const delay of [0, .16]) {
-        const start = this.audio.currentTime + delay, oscillator = this.audio.createOscillator(), gain = this.audio.createGain(), filter = this.audio.createBiquadFilter();
-        oscillator.type = 'sawtooth'; oscillator.frequency.setValueAtTime(190, start); oscillator.frequency.exponentialRampToValueAtTime(75, start + .12);
-        filter.type = 'lowpass'; filter.frequency.value = 650; gain.gain.setValueAtTime(.001, start); gain.gain.exponentialRampToValueAtTime(.07, start + .018); gain.gain.exponentialRampToValueAtTime(.001, start + .13);
-        oscillator.connect(filter); filter.connect(gain); gain.connect(this.audio.destination); oscillator.start(start); oscillator.stop(start + .15); oscillator.onended = () => { oscillator.disconnect(); filter.disconnect(); gain.disconnect(); };
+      this.audio ??= new AudioContext(); await this.audio.resume();
+      if(this.disposed || this.soundMuted)return;
+      const ctx=this.audio;
+      for(const delay of [0,.23]){
+        const start=ctx.currentTime+.015+delay, duration=.19;
+        const noise=ctx.createBuffer(1,Math.ceil(ctx.sampleRate*duration),ctx.sampleRate), data=noise.getChannelData(0);
+        for(let i=0;i<data.length;i++)data[i]=(Math.random()*2-1)*.6;
+        const source=ctx.createBufferSource();source.buffer=noise;
+        const voice=ctx.createOscillator();voice.type='sawtooth';voice.frequency.setValueAtTime(240,start);voice.frequency.exponentialRampToValueAtTime(95,start+duration);
+        const filter=ctx.createBiquadFilter();filter.type='bandpass';filter.frequency.setValueAtTime(1000,start);filter.frequency.exponentialRampToValueAtTime(450,start+duration);filter.Q.value=.75;
+        const gain=ctx.createGain();gain.gain.setValueAtTime(0,start);gain.gain.linearRampToValueAtTime(.55,start+.014);gain.gain.exponentialRampToValueAtTime(.001,start+duration);
+        source.connect(filter);voice.connect(filter);filter.connect(gain);gain.connect(ctx.destination);
+        source.start(start);voice.start(start);source.stop(start+duration);voice.stop(start+duration);
+        voice.onended=()=>{source.disconnect();voice.disconnect();filter.disconnect();gain.disconnect();};
       }
-    } catch { /* The visual bark and gameplay effect work without audio support. */ }
+    }catch { /* Audio may be unavailable; the bark's visual cue remains. */ }
   }
   private updatePowers() {
     this.powers.hidden = this.status !== 'playing';
     for (const button of this.powers.querySelectorAll<HTMLButtonElement>('[data-power]')) {
       const ability = button.dataset.power as Ability, remaining = this.sim.cooldowns[ability];
-      const active = ability === 'boost' ? this.sim.boostRemaining > .001 : ability === 'freeze' ? this.sim.freezeRemaining > .001 : this.sim.barkPulse > 0;
+      const active = ability === 'boost' ? this.sim.boostRemaining > .001 : this.sim.barkPulse > 0;
       button.disabled = this.status !== 'playing' || remaining > .0001;
       button.classList.toggle('active', active);
       button.querySelector('span')!.textContent = active ? 'Active!' : remaining > .0001 ? `${Math.ceil(remaining)}s` : 'Ready';
@@ -167,7 +175,7 @@ export class MeadowGame {
   private updateHud() {
     this.updatePowers();
     const text = `${this.sim.level.id}-${this.sim.captured}-${Math.ceil(this.sim.remaining)}`; if (text === this.lastHud) return; this.lastHud = text;
-    this.hud.innerHTML = `<div class="brand"><strong>Joey Herds <em>3D</em></strong><small>${this.sim.level.name}</small></div><div class="score"><span>HOME</span><strong>${this.sim.captured}<i> / ${this.sim.sheep.length}</i></strong></div><div class="time ${this.sim.remaining < 15 ? 'urgent' : ''}"><span>TIME LEFT</span><strong>${Math.floor(Math.ceil(this.sim.remaining) / 60)}:${String(Math.ceil(this.sim.remaining) % 60).padStart(2, '0')}</strong></div><button class="pause" aria-label="Pause game">Ⅱ</button><div class="control-hint">Click to move · Herd toward the flag</div>`;
+    this.hud.innerHTML = `<div class="brand"><strong>Joey Herds <em>3D</em></strong><small>${this.sim.level.name}</small></div><div class="score"><span>HOME</span><strong>${this.sim.captured}<i> / ${this.sim.sheep.length}</i></strong></div><div class="time ${this.sim.remaining < 15 ? 'urgent' : ''}"><span>TIME LEFT</span><strong>${Math.floor(Math.ceil(this.sim.remaining) / 60)}:${String(Math.ceil(this.sim.remaining) % 60).padStart(2, '0')}</strong></div><button class="pause" aria-label="Pause game">Ⅱ</button><div class="control-hint">${this.sim.level.ponds?.length ? "Water slows everyone · " : ""}Click to move · Herd toward the flag</div>`;
     this.hud.querySelector('button')?.addEventListener('click', this.pause);
   }
   private pause = () => {
@@ -189,7 +197,7 @@ export class MeadowGame {
   };
   private keyDown = (event: KeyboardEvent) => {
     const key = event.key.toLowerCase();
-    if (this.status === 'playing' && [' ', 'b', 'f'].includes(key)) { event.preventDefault(); if (!event.repeat) this.useAbility(key === ' ' ? 'boost' : key === 'b' ? 'bark' : 'freeze'); return; }
+    if (this.status === 'playing' && [' ', 'b'].includes(key)) { event.preventDefault(); if (!event.repeat) this.useAbility(key === ' ' ? 'boost' : 'bark'); return; }
     if (key === 'escape' && !event.repeat) { this.status === 'paused' ? this.resume() : this.pause(); return; }
     if (this.status === 'playing' && ['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(key)) { event.preventDefault(); this.keys.add(key); }
   };
@@ -214,12 +222,11 @@ export class MeadowGame {
     this.dogRig.update(dt, this.sim.joeySpeed);
     this.boostRing.visible = this.sim.boostRemaining > .001;
     const bark = this.sim.barkPulse / .7; this.barkRing.visible = bark > 0;
-    this.barkRing.scale.setScalar(1 + (1 - bark) * 5.5); this.barkRing.material.opacity = bark * .75;
+    this.barkRing.scale.setScalar(1 + (1 - bark) * 3.2); this.barkRing.material.opacity = bark * .75;
     this.flock.forEach((group, i) => {
       const s = this.sim.sheep[i];
       const speed = s.captured ? 0 : Math.hypot(s.vx, s.vz);
-      this.sheepRigs[i].update(dt, speed, s.captured || this.sim.freezeRemaining > .001);
-      this.freezeRings[i].visible = !s.captured && this.sim.freezeRemaining > .001;
+      this.sheepRigs[i].update(dt, speed, s.captured);
       group.position.set(s.x, .02, s.z);
       if (speed > .05) {
         const angle = Math.atan2(s.vx, s.vz) - group.rotation.y;
