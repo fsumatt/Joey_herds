@@ -2,25 +2,28 @@ import * as T from 'three';
 import { footPose, kneePosition } from './gait';
 const material = (color: number, roughness = .85) => new T.MeshStandardMaterial({ color, roughness });
 const orb = new T.SphereGeometry(1, 16, 12);
-const bone = new T.CylinderGeometry(1, 1, 1, 10);
+
 function shape(parent: T.Object3D, geometry: T.BufferGeometry, mat: T.Material, p: number[], s: number[]) {
   const m = new T.Mesh(geometry, mat); m.position.set(p[0], p[1], p[2]); m.scale.set(s[0], s[1], s[2]); m.castShadow = true; parent.add(m); return m;
 }
-type Leg = { root: T.Group; upper: T.Mesh; lower: T.Mesh; paw: T.Mesh; knee: T.Mesh; front: boolean };
+type Leg = { root: T.Group; skin: T.Mesh<T.BufferGeometry>; paw: T.Mesh; front: boolean };
 export class AnimalRig {
   readonly root = new T.Group(); readonly body = new T.Group(); readonly head = new T.Group();
   private legs: Leg[] = []; private phase = 0; private blend = 0; private tail?: T.Object3D;
   constructor(readonly dog = false) {
     this.root.add(this.body); this.body.add(this.head);
-    const dark = material(dog ? 0xad642d : 0x685e53), ivory = material(0xfff5df), hoof = material(dog ? 0xffefd4 : 0x423c35);
+    const dark = material(dog ? 0xc5823b : 0x685e53), ivory = material(0xfff5df), hoof = material(dog ? 0xffefd4 : 0x423c35);
     const h = dog ? .43 : .38;
     for (const x of [-1, 1]) for (const front of [true, false]) {
       const root = new T.Group(); root.position.set(x * (dog ? .185 : .20), h, front ? (dog ? .30 : .28) : (dog ? -.49 : -.27)); this.root.add(root);
-      const upper = shape(root, bone, dark, [0, 0, 0], [.065, .2, .065]);
-      const lower = shape(root, bone, dog ? ivory : dark, [0, 0, 0], [.05, .2, .05]);
-      const knee = shape(root, orb, dark, [0, 0, 0], [.062, .062, .062]);
-      const paw = shape(root, orb, hoof, [0, 0, 0], [dog ? .10 : .065, .055, dog ? .14 : .09]);
-      this.legs.push({ root, upper, lower, knee, paw, front });
+      // One continuous tapered surface, rather than exposed ball-and-stick joints.
+      const geometry=new T.BufferGeometry(),vertices=new Float32Array(11*10*3),indices:number[]=[];
+      geometry.setAttribute('position',new T.BufferAttribute(vertices,3).setUsage(T.DynamicDrawUsage));
+      for(let row=0;row<10;row++)for(let side=0;side<10;side++){const a=row*10+side,b=row*10+(side+1)%10;indices.push(a,b,a+10,b,b+10,a+10);}
+      geometry.setIndex(indices);geometry.addGroup(0,6*10*6,0);geometry.addGroup(6*10*6,4*10*6,1);
+      const skin=new T.Mesh(geometry,[dark,dog?ivory:dark]);skin.castShadow=true;root.add(skin);
+      const paw = shape(root, orb, hoof, [0, 0, 0], [dog ? .087 : .057, .05, dog ? .115 : .075]);
+      this.legs.push({ root, skin, paw, front });
     }
     if (!dog) {
       const wool = material(0xf6edd8), shade = material(0xe8dfc7), face = material(0x736656), nose = material(0x39332f), pink = material(0xc4a192);
@@ -53,26 +56,29 @@ export class AnimalRig {
     const goal = speed > .035 && !frozen ? 1 : 0;
     this.blend += (goal - this.blend) * (1 - Math.exp(-dt * 16));
     if (frozen) this.blend = 0;
-    const stride = (this.dog ? .38 : .32) + running * .16;
+    const stride = (this.dog ? .24 : .23) + running * .09;
     const stance = .64 - running * .12;
-    this.phase += speed * dt * stance / stride;
-    const offsets = [0, .25 + .25 * running, .5, .75 * (1 - running)];
+    this.phase += Math.min(this.dog ? 4.5 : 3.4, speed * stance / stride) * dt;
+    const offsets = [0, .75 - .25 * running, .5, .25 * (1 - running)];
     this.legs.forEach((leg, i) => {
-      const pose = footPose(this.phase + offsets[i], running, stride, .09 + running * .09);
+      const pose = footPose(this.phase + offsets[i], running, stride, .035 + running * .035);
       const z = pose.forward * this.blend, y = .058 - leg.root.position.y + pose.up * this.blend;
-      const upper = this.dog ? .235 : .21, lower = this.dog ? .235 : .21;
-      const k = kneePosition(z, -y, upper, lower, leg.front ? 1 : -1);
+      const upper = this.dog ? .202 : .178, lower = this.dog ? .202 : .178;
+      const k = kneePosition(z, -y, upper, lower, leg.front ? -1 : 1);
       const knee = new T.Vector3(0, -k.down, k.forward), foot = new T.Vector3(0, y, z);
-      this.segment(leg.upper, new T.Vector3(), knee, this.dog ? .068 : .052);
-      this.segment(leg.lower, knee, foot, this.dog ? .056 : .038);
-      leg.knee.position.copy(knee); leg.paw.position.copy(foot);
+      const control=knee.clone().multiplyScalar(2).addScaledVector(foot,-.5);
+      const positions=leg.skin.geometry.getAttribute('position') as T.BufferAttribute;
+      for(let row=0;row<=10;row++){
+        const t=row/10,cy=2*(1-t)*t*control.y+t*t*foot.y,cz=2*(1-t)*t*control.z+t*t*foot.z;
+        const dy=2*(1-2*t)*control.y+2*t*foot.y,dz=2*(1-2*t)*control.z+2*t*foot.z,len=Math.hypot(dy,dz)||1;
+        const radius=this.dog ? .066+(leg.front ? .038 : .05)*(1-t)**2 : .033+.029*(1-t)**2;
+        for(let side=0;side<10;side++){const a=side/10*Math.PI*2;positions.setXYZ(row*10+side,Math.cos(a)*radius,cy+Math.sin(a)*radius*dz/len,cz-Math.sin(a)*radius*dy/len);}
+      }
+      positions.needsUpdate=true;leg.skin.geometry.computeVertexNormals();leg.skin.geometry.computeBoundingSphere();leg.paw.position.copy(foot);
     });
-    this.body.position.y = Math.sin(this.phase * Math.PI * 4) * .018 * this.blend;
-    this.body.rotation.z = Math.sin(this.phase * Math.PI * 2) * .025 * this.blend;
-    this.body.rotation.x = Math.sin(this.phase * Math.PI * 4 + .7) * .02 * this.blend;
+    this.body.position.y = Math.sin(this.phase * Math.PI * 4) * .009 * this.blend;
+    this.body.rotation.z = Math.sin(this.phase * Math.PI * 2) * .012 * this.blend;
+    this.body.rotation.x = Math.sin(this.phase * Math.PI * 4 + .7) * .01 * this.blend;
     if (!this.dog) { this.head.rotation.x = -this.body.rotation.x * .6; if (this.tail) this.tail.rotation.y = Math.sin(this.phase * Math.PI * 2 + 1) * .12 * this.blend; }
-  }
-  private segment(mesh: T.Mesh, a: T.Vector3, b: T.Vector3, radius: number) {
-    const axis = b.clone().sub(a); mesh.position.copy(a).add(b).multiplyScalar(.5); mesh.scale.set(radius, axis.length(), radius); mesh.quaternion.setFromUnitVectors(new T.Vector3(0, 1, 0), axis.normalize());
   }
 }
